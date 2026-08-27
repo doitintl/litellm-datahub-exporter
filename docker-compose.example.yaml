@@ -1,0 +1,14 @@
+services:
+  litellm-datahub-exporter:
+    image: ghcr.io/doitintl/litellm-datahub-exporter:latest
+    restart: unless-stopped
+    environment:
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_API_KEY: ${LITELLM_MASTER_KEY}
+      DOIT_API_KEY: ${DOIT_API_KEY}
+    volumes:
+      - exporter-state:/state
+    ports:
+      - "9464:9464"
+volumes:
+  exporter-state:
