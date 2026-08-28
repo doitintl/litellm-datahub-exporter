@@ -25,8 +25,6 @@ docker run -d --name litellm-datahub-exporter \
   ghcr.io/doitintl/litellm-datahub-exporter:latest
 ```
 
-Or grab a static binary from Releases and run it under systemd. On Kubernetes, run **one replica per LiteLLM deployment** (replicated proxies share one Postgres — do not run the exporter as a sidecar), pointed at the proxy's Service.
-
 Verify a single cycle without starting the loop:
 
 ```sh
@@ -34,6 +32,34 @@ litellm-datahub-exporter --once
 ```
 
 Within ~15 minutes your spend appears in the DoiT console under **DataHub → Datasets → LiteLLM**, and in Cloud Analytics reports as *Cloud provider = LiteLLM*.
+
+## Deployment options
+
+Run **one exporter per LiteLLM deployment** — replicated proxy pods share one Postgres, and the spend APIs read from it, so a single poller covers them all. Never run it as a sidecar (one per replica) and never scale it past one replica. It sits outside the LLM request path, accepts no inbound traffic (the metrics listener is optional), and needs exactly two network paths: your proxy and `api.doit.com:443`.
+
+### Kubernetes (Helm)
+
+```sh
+helm install litellm-exporter ./charts/litellm-datahub-exporter \
+  --namespace litellm \
+  --set litellmBaseUrl=http://litellm:4000 \
+  --set litellmApiKey=sk-... \
+  --set doitApiKey=...
+```
+
+The chart deploys a single-replica Deployment (non-root, read-only rootfs, `Recreate` strategy), a Secret for the two keys (or bring your own via `existingSecret`), a small PVC for the checkpoint (`persistence.enabled=false` for emptyDir — safe, just re-exports on reschedule), a `/healthz` liveness probe, and an optional egress `NetworkPolicy` (`networkPolicy.enabled=true`, point `litellmSelector` at your proxy pods) restricting traffic to the proxy + DNS + HTTPS. All README config vars go under `config:` in values.
+
+### docker-compose
+
+Drop the service from [docker-compose.example.yaml](docker-compose.example.yaml) next to your existing LiteLLM compose stack.
+
+### systemd (VM / bare metal)
+
+Install a release binary and the unit from [deploy/litellm-datahub-exporter.service](deploy/litellm-datahub-exporter.service): credentials live in `/etc/litellm-datahub-exporter/env` (mode 0600), state in `/var/lib/litellm-datahub-exporter/`, hardened with `DynamicUser`/`ProtectSystem=strict`.
+
+### Air-gapped / strict egress
+
+`api.doit.com:443` is the single egress rule to allowlist. The container is `FROM scratch` (no shell, CA certs baked in); binaries are static (`CGO_ENABLED=0`).
 
 ## Configuration
 

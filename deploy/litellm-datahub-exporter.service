@@ -1,0 +1,25 @@
+# systemd unit for running the exporter from a release binary on the host
+# that runs LiteLLM (or any host that can reach it).
+#   1. install the binary:   /usr/local/bin/litellm-datahub-exporter
+#   2. put credentials in:   /etc/litellm-datahub-exporter/env   (mode 0600)
+#   3. systemctl enable --now litellm-datahub-exporter
+[Unit]
+Description=DoiT LiteLLM DataHub exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/litellm-datahub-exporter
+EnvironmentFile=/etc/litellm-datahub-exporter/env
+Environment=STATE_FILE=/var/lib/litellm-datahub-exporter/state.json
+StateDirectory=litellm-datahub-exporter
+DynamicUser=yes
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
