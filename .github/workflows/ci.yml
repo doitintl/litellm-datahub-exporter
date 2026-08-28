@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        litellm: ["main-stable", "main-latest"]
+        litellm: ["main-v1.65.0-stable", "main-v1.74.9-stable", "main-stable", "main-latest"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

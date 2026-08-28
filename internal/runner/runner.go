@@ -33,10 +33,10 @@ func (r *Runner) Startup(ctx context.Context) error {
 		return fmt.Errorf("capability probe (GET /openapi.json): %w", err)
 	}
 
-	r.log.Info("proxy capabilities", "spend_logs", caps.SpendLogs, "daily_activity", caps.DailyActivity, "paths", caps.Paths)
+	r.log.Info("proxy capabilities", "spend_logs", caps.SpendLogs, "per_call", caps.SpendLogsPerCall, "daily_activity", caps.DailyActivity, "paths", caps.Paths)
 
-	if r.cfg.Mode == config.ModePerCall && !caps.SpendLogs {
-		return fmt.Errorf("proxy does not expose /spend/logs; per_call mode unsupported on this LiteLLM version")
+	if r.cfg.Mode == config.ModePerCall && !caps.SpendLogsPerCall {
+		return fmt.Errorf("this LiteLLM version does not return per-request spend rows (/spend/logs has no summarize parameter); set MODE=daily, or upgrade the proxy for per-call granularity")
 	}
 
 	if r.cfg.Mode == config.ModeDaily && !caps.DailyActivity {

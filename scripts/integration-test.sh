@@ -57,16 +57,39 @@ sleep 12
 run_once() {
   LITELLM_BASE_URL=http://localhost:4010 LITELLM_API_KEY=sk-integration-master \
   DOIT_API_URL=http://localhost:8181 DOIT_API_KEY=stub DATASET=LiteLLM \
-  STATE_FILE="$WORK/state.json" go run "$DIR/cmd/exporter" --once
+  STATE_FILE="$WORK/state.json" MODE="${1:-per_call}" go run "$DIR/cmd/exporter" --once
 }
 
-run_once
-run_once  # idempotency: re-run must not error and must not add unique events
+if run_once per_call; then
+  run_once per_call  # idempotency: re-run must not error and must not add unique events
 
-RECEIVED=$(curl -sf http://localhost:8181/received | sed 's/[^0-9]//g')
-if [ "$RECEIVED" -lt 3 ]; then
-  echo "FAIL: expected >=3 unique events at the stub, got $RECEIVED" >&2
+  RECEIVED=$(curl -sf http://localhost:8181/received | sed 's/[^0-9]//g')
+  if [ "$RECEIVED" -lt 3 ]; then
+    echo "FAIL: expected >=3 unique per-call events at the stub, got $RECEIVED" >&2
+    exit 1
+  fi
+else
+  # Old proxies (v1.65-era) have no per-request spend rows; the startup
+  # probe must reject per_call mode rather than exporting garbage.
+  echo "per_call rejected by capability probe on litellm:$TAG — daily mode is the supported path"
+  RECEIVED=0
+fi
+
+# LiteLLM populates its daily aggregate tables asynchronously — wait for the
+# aggregation to land before asserting on daily mode.
+for _ in $(seq 1 24); do
+  DAILY_READY=$(curl -sf "http://localhost:4010/user/daily/activity?start_date=$(date -u -d yesterday +%F 2>/dev/null || date -u -v-1d +%F)&end_date=$(date -u -d tomorrow +%F 2>/dev/null || date -u -v+1d +%F)&include_current_utc_day=true" \
+    -H "Authorization: Bearer sk-integration-master" | grep -c '"date"' || true)
+  [ "$DAILY_READY" -ge 1 ] && break
+  sleep 5
+done
+
+run_once daily  # aggregate mode against the same proxy (daily endpoints, pagination)
+
+RECEIVED_AFTER_DAILY=$(curl -sf http://localhost:8181/received | sed 's/[^0-9]//g')
+if [ "$RECEIVED_AFTER_DAILY" -le "$RECEIVED" ]; then
+  echo "FAIL: daily mode added no events ($RECEIVED -> $RECEIVED_AFTER_DAILY)" >&2
   exit 1
 fi
 
-echo "PASS: $RECEIVED unique events exported against litellm:$TAG"
+echo "PASS: $RECEIVED per-call + $((RECEIVED_AFTER_DAILY - RECEIVED)) daily unique events exported against litellm:$TAG"

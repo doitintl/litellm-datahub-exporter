@@ -102,7 +102,14 @@ func DailyToEvents(results []litellm.DailyResult, o Options) []datahub.Event {
 
 	for _, day := range results {
 		for model, modelCell := range day.Breakdown.Models {
-			for keyHash, keyCell := range modelCell.APIKeyBreakdown {
+			keyCells := modelCell.APIKeyBreakdown
+			if len(keyCells) == 0 {
+				// v1.65-era daily shape has no per-key nesting under models;
+				// emit one event per (day x model) from the flat cell.
+				keyCells = map[string]litellm.DailyAPIKeyCell{"": {Metrics: modelCell.Metrics}}
+			}
+
+			for keyHash, keyCell := range keyCells {
 				provider, _, hasProvider := strings.Cut(model, "/")
 				if !hasProvider {
 					provider = ""

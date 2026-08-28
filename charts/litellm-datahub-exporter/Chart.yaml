@@ -2,6 +2,6 @@ apiVersion: v2
 name: litellm-datahub-exporter
 description: Export spend from a self-hosted LiteLLM proxy into DoiT Cloud Intelligence via the DataHub API
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.1.1
+appVersion: "0.1.1"
 home: https://github.com/doitintl/litellm-datahub-exporter

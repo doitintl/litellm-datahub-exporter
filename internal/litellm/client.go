@@ -85,6 +85,28 @@ type DailyModelCell struct {
 	APIKeyBreakdown map[string]DailyAPIKeyCell `json:"api_key_breakdown"`
 }
 
+// UnmarshalJSON accepts both daily-breakdown shapes: modern LiteLLM nests
+// metrics under "metrics" with an "api_key_breakdown" map; older versions
+// (v1.65-era) put the metric fields directly on the cell.
+func (c *DailyModelCell) UnmarshalJSON(data []byte) error {
+	type modern DailyModelCell
+
+	var m modern
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+
+	if m.Metrics == (DailyMetrics{}) && len(m.APIKeyBreakdown) == 0 {
+		if err := json.Unmarshal(data, &m.Metrics); err != nil {
+			return err
+		}
+	}
+
+	*c = DailyModelCell(m)
+
+	return nil
+}
+
 type DailyResult struct {
 	Date      string `json:"date"`
 	Breakdown struct {
@@ -108,6 +130,9 @@ func (c *Client) UserDailyActivity(ctx context.Context, startDate, endDate strin
 			"end_date":   {endDate},
 			"page":       {fmt.Sprint(page)},
 			"page_size":  {"100"},
+			// Modern proxies exclude the current UTC day by default; older
+			// versions ignore the unknown parameter.
+			"include_current_utc_day": {"true"},
 		}
 
 		var resp dailyResponse
@@ -124,24 +149,42 @@ func (c *Client) UserDailyActivity(ctx context.Context, startDate, endDate strin
 }
 
 type Capabilities struct {
-	SpendLogs     bool
-	DailyActivity bool
-	Paths         int
+	SpendLogs bool
+	// SpendLogsPerCall is true when /spend/logs supports the summarize
+	// parameter — the marker for per-request rows. Older proxies (v1.65-era)
+	// expose /spend/logs but only return day-aggregate rows without
+	// request ids, which per_call mode cannot use.
+	SpendLogsPerCall bool
+	DailyActivity    bool
+	Paths            int
 }
 
 func (c *Client) Probe(ctx context.Context) (Capabilities, error) {
 	var spec struct {
-		Paths map[string]json.RawMessage `json:"paths"`
+		Paths map[string]struct {
+			Get struct {
+				Parameters []struct {
+					Name string `json:"name"`
+				} `json:"parameters"`
+			} `json:"get"`
+		} `json:"paths"`
 	}
 
 	if err := c.get(ctx, "/openapi.json", &spec); err != nil {
 		return Capabilities{}, err
 	}
 
-	_, spendLogs := spec.Paths["/spend/logs"]
+	spendLogs, hasSpendLogs := spec.Paths["/spend/logs"]
 	_, daily := spec.Paths["/user/daily/activity"]
 
-	return Capabilities{SpendLogs: spendLogs, DailyActivity: daily, Paths: len(spec.Paths)}, nil
+	perCall := false
+	for _, p := range spendLogs.Get.Parameters {
+		if p.Name == "summarize" {
+			perCall = true
+		}
+	}
+
+	return Capabilities{SpendLogs: hasSpendLogs, SpendLogsPerCall: perCall, DailyActivity: daily, Paths: len(spec.Paths)}, nil
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) error {

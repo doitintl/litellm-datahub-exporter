@@ -16,6 +16,8 @@ LiteLLM proxy + Postgres ──(polls /spend/logs)──▶ exporter ──HTTPS
 
 Requirements: LiteLLM ≥ v1.65 with the database (spend logging) enabled; a DoiT API token with the `DataHubAdmin` scope (Console → User view → API); a DataHub subscription on your DoiT tier.
 
+Version support: **daily mode works from v1.65**. **Per-call mode needs a newer proxy** — one whose `/spend/logs` supports `summarize=false` (v1.65-era proxies only return day-aggregate rows). The exporter probes your proxy at startup and refuses per-call mode with a clear message when the proxy can't provide per-request rows, so misconfiguration fails fast instead of exporting wrong data.
+
 ```sh
 docker run -d --name litellm-datahub-exporter \
   -e LITELLM_BASE_URL=http://litellm:4000 \
