@@ -90,6 +90,24 @@ The labels come from how you instrument calls through LiteLLM:
 - **team / virtual_key** ← the LiteLLM key and team the call was made with (key alias used when set)
 - **tag** ← LiteLLM request tags (body `metadata.tags` or the `x-litellm-tags` header)
 
+## Verifying a release
+
+Every release is built by the public [release workflow](.github/workflows/release.yml) and signed with keyless [cosign](https://docs.sigstore.dev/):
+
+```sh
+# container image
+cosign verify ghcr.io/doitintl/litellm-datahub-exporter:latest \
+  --certificate-identity-regexp 'https://github.com/doitintl/litellm-datahub-exporter/\.github/workflows/release\.yml@refs/tags/v.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# binary checksums
+cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp 'https://github.com/doitintl/litellm-datahub-exporter/\.github/workflows/release\.yml@refs/tags/v.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Images carry BuildKit provenance and SBOM attestations (`docker buildx imagetools inspect ... --format '{{ json .Provenance }}'`). Binaries are reproducible: `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=<tag>"` from the tag yields a bit-identical binary.
+
 ## Building from source
 
 ```sh
