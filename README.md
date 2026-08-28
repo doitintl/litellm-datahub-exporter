@@ -1,6 +1,6 @@
-# litellm-datahub-exporter
+# LiteLLM Exporter
 
-Export spend from your self-hosted [LiteLLM](https://docs.litellm.ai/) proxy into [DoiT Cloud Intelligence](https://www.doit.com/) — one DataHub event per model call, labeled by provider, model, virtual key, team, feature, and end customer, so your LLM spend lands in Cloud Analytics next to your cloud bill.
+Export spend from your self-hosted [LiteLLM](https://docs.litellm.ai/) proxy into [Cloud Intelligence](https://www.doit.com/) — one DataHub event per model call, labeled by provider, model, virtual key, team, feature, and end customer, so your LLM spend lands in Cloud Analytics next to your cloud bill.
 
 ```
 LiteLLM proxy + Postgres ──(polls /spend/logs)──▶ exporter ──HTTPS──▶ api.doit.com/datahub/v1/events ──▶ Cloud Analytics (~15 min)
