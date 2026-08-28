@@ -43,9 +43,11 @@ type SpendRow struct {
 	TeamID            string   `json:"team_id"`
 	RequestTags       []string `json:"request_tags"`
 	Metadata          struct {
-		UserAPIKeyAlias  string         `json:"user_api_key_alias"`
-		UserAPIKeyTeamID string         `json:"user_api_key_team_id"`
-		SpendLogsMeta    map[string]any `json:"spend_logs_metadata"`
+		UserAPIKeyAlias     string         `json:"user_api_key_alias"`
+		UserAPIKeyTeamID    string         `json:"user_api_key_team_id"`
+		UserAPIKeyUserID    string         `json:"user_api_key_user_id"`
+		UserAPIKeyUserEmail string         `json:"user_api_key_user_email"`
+		SpendLogsMeta       map[string]any `json:"spend_logs_metadata"`
 	} `json:"metadata"`
 }
 

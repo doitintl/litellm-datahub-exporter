@@ -93,6 +93,14 @@ func TestSpendRowMapping(t *testing.T) {
 		"system_label/cost_basis":               "estimated",
 		"system_label/litellm/call_type":        "acompletion",
 		"system_label/litellm/underlying_model": "anthropic/claude-3-5-sonnet-20241022",
+		"system_label/genai/genai_spend":        "true",
+		"system_label/genai/model":              "claude-3-5-sonnet-20241022",
+		"system_label/genai/model_family":       "Claude",
+		"system_label/genai/is_model_serving":   "true",
+		"system_label/genai/consumption_model":  "PAYG",
+		"system_label/genai/user_id":            "end-user-731",
+		"system_label/genai/api_key_name":       "monarch-advice-chat",
+		"system_label/genai/feature":            "advice-chat",
 	}
 
 	got := labels(event)
@@ -154,6 +162,28 @@ func TestTraceLabelsOffByDefault(t *testing.T) {
 	got = labels(event)
 	if got["label/request_id"] == "" || got["label/parent_trace_id"] != "trace-xyz-9" {
 		t.Errorf("trace labels missing when enabled: %v", got)
+	}
+}
+
+func TestModelFamily(t *testing.T) {
+	cases := map[string]string{
+		"anthropic/claude-3-5-sonnet-20241022":  "Claude",
+		"openai/gpt-4o-mini":                    "GPT",
+		"gpt-oss-120b":                          "GPT OSS",
+		"mistralai/Mixtral-8x7B-Instruct-v0.1":  "Mixtral",
+		"mistral/mistral-large-latest":          "Mistral",
+		"gemini/gemini-2.5-pro":                 "Gemini",
+		"bedrock/meta.llama3-70b-instruct-v1:0": "Meta Llama",
+		"deepseek/deepseek-chat":                "DeepSeek",
+		"xai/grok-4":                            "Grok",
+		"openai/text-embedding-3-small":         "Embedding",
+		"my-org/fine-tuned-internal-model":      "Custom Model",
+	}
+
+	for model, want := range cases {
+		if got := modelFamily(model); got != want {
+			t.Errorf("modelFamily(%q) = %q, want %q", model, got, want)
+		}
 	}
 }
 
@@ -236,6 +266,10 @@ func TestDailyToEvents(t *testing.T) {
 	got := labels(e)
 	if got["label/provider"] != "anthropic" || got["label/virtual_key"] != "monarch-advice-chat" || got["label/team"] != "team-1" {
 		t.Errorf("daily labels = %v", got)
+	}
+
+	if got["system_label/genai/genai_spend"] != "true" || got["system_label/genai/model_family"] != "Claude" || got["system_label/genai/consumption_model"] != "PAYG" {
+		t.Errorf("daily genai labels = %v", got)
 	}
 
 	again := DailyToEvents(daily, opts())

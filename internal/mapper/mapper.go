@@ -66,6 +66,15 @@ func SpendRowToEvent(r litellm.SpendRow, o Options) (datahub.Event, error) {
 		dims = append(dims, datahub.Dimension{Key: "tag", Type: "label", Value: tags[0]})
 	}
 
+	feature, _ := r.Metadata.SpendLogsMeta[o.FeatureMetaKey].(string)
+	dims = append(dims, genaiDimensions(
+		r.Model,
+		coalesce(r.EndUser, r.Metadata.UserAPIKeyUserID),
+		r.Metadata.UserAPIKeyUserEmail,
+		r.Metadata.UserAPIKeyAlias,
+		feature,
+	)...)
+
 	if o.EmitTraceLabels {
 		dims = append(dims, datahub.Dimension{Key: "request_id", Type: "label", Value: r.RequestID})
 
@@ -110,6 +119,8 @@ func DailyToEvents(results []litellm.DailyResult, o Options) []datahub.Event {
 					{Key: "team", Type: "label", Value: keyCell.Metadata.TeamID},
 					{Key: "cost_basis", Type: "system_label", Value: "estimated"},
 				}
+
+				dims = append(dims, genaiDimensions(model, "", "", keyCell.Metadata.KeyAlias, "")...)
 
 				events = append(events, datahub.Event{
 					Provider:   o.Dataset,
