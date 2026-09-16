@@ -17,6 +17,12 @@ config:
   POLL_INTERVAL: "5m"
   LOOKBACK_HOURS: "48"
   BACKFILL_DAYS: "0"
+  # Set this when one shared virtual key fronts every caller and the person's
+  # email is in end_user, which is what fills genai/user_email for the GenAI
+  # dashboards. "end_user", "key_alias" or "none" (default). Read the README
+  # section "Per-person email" before turning it on: the source is declared,
+  # not detected, and a wrong address is worse than an absent one.
+  # GENAI_USER_EMAIL_SOURCE: "end_user"
 
 image:
   repository: ghcr.io/doitintl/litellm-datahub-exporter

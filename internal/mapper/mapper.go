@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doitintl/litellm-datahub-exporter/internal/config"
 	"github.com/doitintl/litellm-datahub-exporter/internal/datahub"
 	"github.com/doitintl/litellm-datahub-exporter/internal/litellm"
 )
@@ -21,6 +22,7 @@ type Options struct {
 	FeatureMetaKey  string
 	TraceMetaKey    string
 	EmitTraceLabels bool
+	UserEmailSource config.UserEmailSource
 	TagDenyPrefixes []string
 }
 
@@ -70,7 +72,7 @@ func SpendRowToEvent(r litellm.SpendRow, o Options) (datahub.Event, error) {
 	dims = append(dims, genaiDimensions(
 		r.Model,
 		coalesce(r.EndUser, r.Metadata.UserAPIKeyUserID),
-		r.Metadata.UserAPIKeyUserEmail,
+		userEmail(r, o.UserEmailSource),
 		r.Metadata.UserAPIKeyAlias,
 		feature,
 	)...)

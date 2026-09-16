@@ -2,6 +2,12 @@
 // integration test: it accepts event batches, enforces the contract limits
 // the real API enforces (batch size, provider pattern, within-batch id
 // uniqueness), and reports what it received on GET /received.
+//
+// It also records the DIMENSIONS of every event, so a test can assert what a
+// label CONTAINS and not merely that a well-formed event arrived. GET
+// /dimension?key=<key> answers with the distinct values seen for that
+// dimension, which is how the GENAI_USER_EMAIL_SOURCE cases check that the
+// address reached DataHub -- and that it did not when the source is unset.
 package main
 
 import (
@@ -10,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"sync"
 )
 
@@ -25,6 +32,9 @@ func main() {
 		mu       sync.Mutex
 		eventIDs = map[string]int{}
 		datasets = map[string]bool{}
+		// "<type>/<key>" -> the distinct values seen, e.g.
+		// "system_label/genai/user_email" -> {"itest@example.com"}.
+		dimensions = map[string]map[string]bool{}
 	)
 
 	mux := http.NewServeMux()
@@ -60,9 +70,14 @@ func main() {
 	mux.HandleFunc("POST /datahub/v1/events", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Events []struct {
-				Provider string `json:"provider"`
-				ID       string `json:"id"`
-				Metrics  []any  `json:"metrics"`
+				Provider   string `json:"provider"`
+				ID         string `json:"id"`
+				Metrics    []any  `json:"metrics"`
+				Dimensions []struct {
+					Key   string `json:"key"`
+					Type  string `json:"type"`
+					Value string `json:"value"`
+				} `json:"dimensions"`
 			} `json:"events"`
 		}
 
@@ -85,6 +100,15 @@ func main() {
 		mu.Lock()
 		for _, e := range body.Events {
 			eventIDs[e.ID]++
+
+			for _, d := range e.Dimensions {
+				k := d.Type + "/" + d.Key
+				if dimensions[k] == nil {
+					dimensions[k] = map[string]bool{}
+				}
+
+				dimensions[k][d.Value] = true
+			}
 		}
 		mu.Unlock()
 
@@ -97,6 +121,22 @@ func main() {
 		defer mu.Unlock()
 
 		_ = json.NewEncoder(w).Encode(map[string]any{"unique_events": len(eventIDs)})
+	})
+
+	// Distinct values seen for one dimension, as a JSON array. An absent
+	// dimension answers [] rather than 404, so a test can assert absence the
+	// same way it asserts a value.
+	mux.HandleFunc("GET /dimension", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		values := []string{}
+		for v := range dimensions[r.URL.Query().Get("key")] {
+			values = append(values, v)
+		}
+
+		sort.Strings(values)
+		_ = json.NewEncoder(w).Encode(values)
 	})
 
 	log.Fatal(http.ListenAndServe(addr, mux))

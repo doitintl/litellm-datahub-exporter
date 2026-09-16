@@ -6,6 +6,7 @@ set -euo pipefail
 TAG="${1:-main-stable}"
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
+ITEST_EMAIL="itest@example.com"
 trap 'docker compose -f "$WORK/compose.yaml" down -v >/dev/null 2>&1 || true; [ -n "${STUB_PID:-}" ] && kill "$STUB_PID" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 
 cat > "$WORK/litellm-config.yaml" <<'EOF'
@@ -47,17 +48,38 @@ go build -o "$WORK/datahub-stub" "$DIR/scripts/datahub-stub"
 STUB_PID=$!
 sleep 1
 
+# The fourth request carries an EMAIL-SHAPED end_user. A proxy that
+# authenticates people puts the person's address there, and that is the only
+# per-request identity a shared virtual key carries -- see
+# GENAI_USER_EMAIL_SOURCE in the README.
 for i in 1 2 3; do
   curl -sf -o /dev/null -X POST http://localhost:4010/v1/chat/completions \
     -H "Authorization: Bearer sk-integration-master" -H 'Content-Type: application/json' \
     -d "{\"model\":\"test-model\",\"user\":\"itest-user\",\"messages\":[{\"role\":\"user\",\"content\":\"req $i\"}]}"
 done
+curl -sf -o /dev/null -X POST http://localhost:4010/v1/chat/completions \
+  -H "Authorization: Bearer sk-integration-master" -H 'Content-Type: application/json' \
+  -d "{\"model\":\"test-model\",\"user\":\"$ITEST_EMAIL\",\"messages\":[{\"role\":\"user\",\"content\":\"req email\"}]}"
 sleep 12
 
+# $2 sets GENAI_USER_EMAIL_SOURCE. With no $2 the variable is LEFT UNSET
+# rather than set to "none" -- the guarantee under test is what an existing
+# deployment does, and an existing deployment does not set it at all. Passing
+# "none" explicitly would mask a change to the DEFAULT in config.FromEnv,
+# which is exactly the regression these runs exist to catch.
 run_once() {
-  LITELLM_BASE_URL=http://localhost:4010 LITELLM_API_KEY=sk-integration-master \
-  DOIT_API_URL=http://localhost:8181 DOIT_API_KEY=stub DATASET=LiteLLM \
-  STATE_FILE="$WORK/state.json" MODE="${1:-per_call}" go run "$DIR/cmd/exporter" --once
+  src=()
+  [ -n "${2:-}" ] && src=(GENAI_USER_EMAIL_SOURCE="$2")
+
+  env LITELLM_BASE_URL=http://localhost:4010 LITELLM_API_KEY=sk-integration-master \
+    DOIT_API_URL=http://localhost:8181 DOIT_API_KEY=stub DATASET=LiteLLM \
+    STATE_FILE="$WORK/state.json" MODE="${1:-per_call}" \
+    ${src[@]+"${src[@]}"} go run "$DIR/cmd/exporter" --once
+}
+
+# Distinct values the stub saw for one dimension, as a bare sorted list.
+seen_dimension() {
+  curl -sf "http://localhost:8181/dimension?key=$1" | tr -d '[]"' 
 }
 
 if run_once per_call; then
@@ -68,6 +90,32 @@ if run_once per_call; then
     echo "FAIL: expected >=3 unique per-call events at the stub, got $RECEIVED" >&2
     exit 1
   fi
+
+  # THE DEFAULT MUST EMIT NOTHING. Both runs above left
+  # GENAI_USER_EMAIL_SOURCE unset, and one of the rows carries an
+  # email-shaped end_user -- so an exporter that promoted it without being
+  # told would show up here. This is the backward-compatibility guarantee
+  # for every deployment that does not set the variable.
+  if [ -n "$(seen_dimension system_label/genai/user_email)" ]; then
+    echo "FAIL: genai/user_email emitted with GENAI_USER_EMAIL_SOURCE unset: $(seen_dimension system_label/genai/user_email)" >&2
+    exit 1
+  fi
+
+  # DECLARED: the address must now reach DataHub. Proves the whole chain
+  # against a REAL proxy -- that LiteLLM puts the value in end_user, that the
+  # allowlist decode keeps it, and that the dimension survives to the event.
+  run_once per_call end_user
+  if [ "$(seen_dimension system_label/genai/user_email)" != "$ITEST_EMAIL" ]; then
+    echo "FAIL: GENAI_USER_EMAIL_SOURCE=end_user did not export $ITEST_EMAIL, saw: $(seen_dimension system_label/genai/user_email)" >&2
+    exit 1
+  fi
+
+  # The opaque ids in the other three rows must NOT have been promoted.
+  if [ "$(seen_dimension system_label/genai/user_id | tr ',' '\n' | grep -c .)" -lt 2 ]; then
+    echo "FAIL: expected several distinct genai/user_id values" >&2
+    exit 1
+  fi
+  echo "per-call: genai/user_email absent by default, $ITEST_EMAIL when declared"
 else
   # Old proxies (v1.65-era) have no per-request spend rows; the startup
   # probe must reject per_call mode rather than exporting garbage.
