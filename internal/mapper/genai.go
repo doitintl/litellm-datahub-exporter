@@ -3,7 +3,9 @@ package mapper
 import (
 	"strings"
 
+	"github.com/doitintl/litellm-datahub-exporter/internal/config"
 	"github.com/doitintl/litellm-datahub-exporter/internal/datahub"
+	"github.com/doitintl/litellm-datahub-exporter/internal/litellm"
 )
 
 // genaiDimensions emits the DoiT GenAI-intelligence system-label taxonomy
@@ -68,4 +70,56 @@ func modelFamily(model string) string {
 	}
 
 	return "Custom Model"
+}
+
+// userEmail resolves genai/user_email, in this order:
+//
+//  1. user_api_key_user_email, which LiteLLM derives from the user record
+//     linked to the virtual key. It always wins: it is LiteLLM's own answer.
+//  2. the field named by GENAI_USER_EMAIL_SOURCE, and only when that value is
+//     shaped like an email address.
+//  3. empty, which is the default and drops the dimension.
+//
+// Step 2 exists for a deployment behind ONE shared virtual key, where step 1 is
+// the same for every caller or empty. Step 2 is off unless declared, so an
+// existing deployment emits exactly what it emitted before.
+func userEmail(r litellm.SpendRow, source config.UserEmailSource) string {
+	if r.Metadata.UserAPIKeyUserEmail != "" {
+		return r.Metadata.UserAPIKeyUserEmail
+	}
+
+	var candidate string
+
+	switch source {
+	case config.UserEmailSourceEndUser:
+		candidate = r.EndUser
+	case config.UserEmailSourceKeyAlias:
+		candidate = r.Metadata.UserAPIKeyAlias
+	default:
+		return ""
+	}
+
+	return emailOrEmpty(candidate)
+}
+
+// emailOrEmpty returns s only when it is shaped like an email address.
+//
+// It guards a DECLARED source against a deployment that turns the setting on
+// and then sends opaque ids. The values reach dashboards where nothing marks
+// one as inferred, so an id in an email field is worse than an empty field.
+func emailOrEmpty(s string) string {
+	at := strings.IndexByte(s, '@')
+	if at <= 0 || at == len(s)-1 {
+		return ""
+	}
+
+	if strings.ContainsAny(s, " \t") || strings.Count(s, "@") != 1 {
+		return ""
+	}
+
+	if !strings.Contains(s[at+1:], ".") {
+		return ""
+	}
+
+	return s
 }

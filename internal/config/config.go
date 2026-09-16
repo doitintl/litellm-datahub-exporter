@@ -15,6 +15,34 @@ const (
 	ModeDaily   Mode = "daily"
 )
 
+// UserEmailSource names the spend-row field that holds the person's email
+// address, for deployments where LiteLLM cannot supply one itself.
+//
+// genai/user_email is populated from user_api_key_user_email, which LiteLLM
+// derives from the user record linked to the VIRTUAL KEY. A deployment that
+// puts every caller behind ONE shared key therefore has no per-request email:
+// the field is identical for everyone, or empty when the key has no linked
+// user. The person's identity exists only in end_user, written by whatever
+// authenticates them.
+//
+// The source is DECLARED rather than detected. end_user is an opaque customer
+// id in most deployments, and plenty of ids are email-shaped without being a
+// person's address -- a reseller's billing contact, a tenant identifier. These
+// values autopopulate dashboards, where nothing marks a value as inferred, so a
+// wrong address is worse than an absent one.
+type UserEmailSource string
+
+const (
+	// UserEmailSourceNone is the default and changes nothing.
+	UserEmailSourceNone UserEmailSource = "none"
+	// UserEmailSourceEndUser reads end_user, for a shared key behind an
+	// identity-aware proxy or gateway that authenticates each caller.
+	UserEmailSourceEndUser UserEmailSource = "end_user"
+	// UserEmailSourceKeyAlias reads the virtual key's alias, for deployments
+	// that name one key per person after that person.
+	UserEmailSourceKeyAlias UserEmailSource = "key_alias"
+)
+
 type Config struct {
 	LiteLLMBaseURL  string
 	LiteLLMAPIKey   string
@@ -29,6 +57,7 @@ type Config struct {
 	FeatureMetaKey  string
 	TraceMetaKey    string
 	EmitTraceLabels bool
+	UserEmailSource UserEmailSource
 	TagDenyPrefixes []string
 	StateFile       string
 	MetricsAddr     string
@@ -51,6 +80,7 @@ func FromEnv() (Config, error) {
 		FeatureMetaKey:  getenv("FEATURE_METADATA_KEY", "feature"),
 		TraceMetaKey:    getenv("TRACE_METADATA_KEY", "parent_trace_id"),
 		EmitTraceLabels: getenv("EMIT_TRACE_LABELS", "false") == "true",
+		UserEmailSource: UserEmailSource(getenv("GENAI_USER_EMAIL_SOURCE", string(UserEmailSourceNone))),
 		TagDenyPrefixes: strings.Split(getenv("TAG_DENY_PREFIXES", "User-Agent"), ","),
 		StateFile:       getenv("STATE_FILE", "state.json"),
 		MetricsAddr:     getenv("METRICS_ADDR", ":9464"),
@@ -80,6 +110,12 @@ func FromEnv() (Config, error) {
 	}
 	if c.Mode != ModePerCall && c.Mode != ModeDaily {
 		return c, fmt.Errorf("MODE must be %q or %q", ModePerCall, ModeDaily)
+	}
+	switch c.UserEmailSource {
+	case UserEmailSourceNone, UserEmailSourceEndUser, UserEmailSourceKeyAlias:
+	default:
+		return c, fmt.Errorf("GENAI_USER_EMAIL_SOURCE must be %q, %q or %q",
+			UserEmailSourceNone, UserEmailSourceEndUser, UserEmailSourceKeyAlias)
 	}
 
 	return c, nil

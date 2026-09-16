@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doitintl/litellm-datahub-exporter/internal/config"
 	"github.com/doitintl/litellm-datahub-exporter/internal/datahub"
 	"github.com/doitintl/litellm-datahub-exporter/internal/litellm"
 )
@@ -275,5 +276,91 @@ func TestDailyToEvents(t *testing.T) {
 	again := DailyToEvents(daily, opts())
 	if again[0].ID != e.ID {
 		t.Error("daily id not deterministic")
+	}
+}
+
+// The default leaves every existing deployment untouched: TestSpendRowMapping
+// above asserts the complete dimension set for a row whose end_user is
+// "end-user-731" and whose key carries no user_email, and genai/user_email is
+// absent from it. These cases cover the declared sources.
+func TestUserEmailSource(t *testing.T) {
+	row := func(keyEmail, endUser, alias string) litellm.SpendRow {
+		var r litellm.SpendRow
+		r.EndUser = endUser
+		r.Metadata.UserAPIKeyUserEmail = keyEmail
+		r.Metadata.UserAPIKeyAlias = alias
+
+		return r
+	}
+
+	cases := []struct {
+		name   string
+		row    litellm.SpendRow
+		source config.UserEmailSource
+		want   string
+	}{
+		{"default emits nothing", row("", "ana@corp.com", "shared-key"), config.UserEmailSourceNone, ""},
+		{"unset source emits nothing", row("", "ana@corp.com", "shared-key"), "", ""},
+		{"litellm own field always wins", row("key@corp.com", "ana@corp.com", "ana@corp.com"), config.UserEmailSourceEndUser, "key@corp.com"},
+		{"end_user when declared", row("", "ana@corp.com", "shared-key"), config.UserEmailSourceEndUser, "ana@corp.com"},
+		{"key_alias when declared", row("", "end-user-731", "ana@corp.com"), config.UserEmailSourceKeyAlias, "ana@corp.com"},
+		{"declared source that is not an email", row("", "end-user-731", "shared-key"), config.UserEmailSourceEndUser, ""},
+		{"end_user declared but key_alias holds the address", row("", "end-user-731", "ana@corp.com"), config.UserEmailSourceEndUser, ""},
+		{"empty end_user", row("", "", "shared-key"), config.UserEmailSourceEndUser, ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := userEmail(tc.row, tc.source); got != tc.want {
+				t.Errorf("userEmail = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A dashboard shows these values with nothing marking one as inferred, so a
+// near-miss must read as absent rather than as an address.
+func TestEmailOrEmptyRejectsNonAddresses(t *testing.T) {
+	for _, s := range []string{
+		"", "end-user-731", "@corp.com", "ana@", "ana@corp", "ana corp@x.com",
+		"ana@corp.com ", "ana@@corp.com", "ana@corp.com@evil.com",
+	} {
+		if got := emailOrEmpty(s); got != "" {
+			t.Errorf("emailOrEmpty(%q) = %q, want empty", s, got)
+		}
+	}
+
+	for _, s := range []string{"ana@corp.com", "ana.lee+llm@sub.corp.co.uk"} {
+		if got := emailOrEmpty(s); got != s {
+			t.Errorf("emailOrEmpty(%q) = %q, want it unchanged", s, got)
+		}
+	}
+}
+
+// genai/user_email must reach the event, not merely resolve.
+func TestGenaiUserEmailReachesTheEvent(t *testing.T) {
+	o := opts()
+	o.UserEmailSource = config.UserEmailSourceEndUser
+
+	event, err := SpendRowToEvent(decodeLiveRow(t), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The live row's end_user is "end-user-731", not an address.
+	if got := labels(event)["system_label/genai/user_email"]; got != "" {
+		t.Errorf("genai/user_email = %q, want it absent for a non-address end_user", got)
+	}
+
+	row := decodeLiveRow(t)
+	row.EndUser = "ana@corp.com"
+
+	event, err = SpendRowToEvent(row, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := labels(event)["system_label/genai/user_email"]; got != "ana@corp.com" {
+		t.Errorf("genai/user_email = %q, want ana@corp.com", got)
 	}
 }

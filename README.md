@@ -78,10 +78,37 @@ Install a release binary and the unit from [deploy/litellm-datahub-exporter.serv
 | `BACKFILL_DAYS` | `0` | On first run, export this much history (bounded by your `maximum_spend_logs_retention_period` and DataHub's ±2-year window) |
 | `FEATURE_METADATA_KEY` | `feature` | Key read from `spend_logs_metadata` into the `feature` label |
 | `EMIT_TRACE_LABELS` | `false` | Also emit `request_id`/`parent_trace_id` labels (high cardinality — leave off unless you need them) |
+| `GENAI_USER_EMAIL_SOURCE` | `none` | Where the person's email lives when LiteLLM cannot supply one: `none`, `end_user` or `key_alias`. See [Per-person email](#per-person-email) |
 | `TAG_DENY_PREFIXES` | `User-Agent` | Comma-separated tag prefixes to drop (LiteLLM auto-injects `User-Agent:` tags) |
 | `STATE_FILE` | `state.json` | Checkpoint path |
 | `METRICS_ADDR` | `:9464` | Prometheus `/metrics` + `/healthz` listener (`""` disables) |
 | `MAX_BATCH` | `5000` | Events per DataHub request (hard API cap: 50,000) |
+
+
+## Per-person email
+
+`genai/user_email` comes from `user_api_key_user_email`, which LiteLLM reads
+from the user account attached to the **virtual key** — not from the request.
+One key shared by many callers therefore gives one email for all of them, or
+none when the key has no user account. The person is still named in `end_user`,
+written by whatever authenticates the caller.
+
+`GENAI_USER_EMAIL_SOURCE` names the field to read instead:
+
+| Value | Reads | Use when |
+|---|---|---|
+| `none` | nothing | Default. Nothing changes. |
+| `end_user` | `end_user` | One shared key, and a gateway authenticates each caller |
+| `key_alias` | the key's alias | One key per person, each named after that person |
+
+`user_api_key_user_email` still wins when LiteLLM supplies it, and a value that
+does not look like an email address is dropped rather than exported.
+
+**Set this only if you know what your `end_user` holds.** In most deployments it
+is a customer id, not a person, and some ids look like an address while naming a
+company — a billing contact, a tenant. The exporter cannot tell the difference,
+so you tell it. Dashboards show these values as facts and mark nothing as a
+guess, so a wrong address is worse than an empty field.
 
 ## Labeling your traffic
 

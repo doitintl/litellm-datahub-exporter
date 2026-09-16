@@ -123,6 +123,7 @@ func (r *Runner) collect(ctx context.Context, startDate, endDate string) ([]data
 		FeatureMetaKey:  r.cfg.FeatureMetaKey,
 		TraceMetaKey:    r.cfg.TraceMetaKey,
 		EmitTraceLabels: r.cfg.EmitTraceLabels,
+		UserEmailSource: r.cfg.UserEmailSource,
 		TagDenyPrefixes: r.cfg.TagDenyPrefixes,
 	}
 
