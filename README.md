@@ -9,7 +9,7 @@ LiteLLM proxy + Postgres ──(polls /spend/logs)──▶ exporter ──HTTPS
 
 - **Runs entirely in your infrastructure.** The exporter polls your proxy's spend APIs and makes outbound HTTPS calls to `api.doit.com` — nothing else. Your LiteLLM admin key never leaves your network; DoiT needs no network path in.
 - **Never ships prompt content.** Spend rows are decoded through a strict field allowlist; `messages`/`response` fields are dropped at decode time and cannot be serialized onward (covered by a test).
-- **Crash-safe and idempotent.** Every event has a deterministic id and DataHub dedups by id (last write wins), so restarts, re-polls, and backfills overwrite instead of double-counting. Losing the checkpoint file is harmless.
+- **Crash-safe and idempotent.** Every event has a deterministic id and DataHub reports dedupe by id (last write wins), so restarts, re-polls, and backfills never double-count. Each cycle re-reads a trailing window to catch late spend rows but pushes only events that are new or changed, so DataHub stores each event once, not once per poll. Losing the state directory is harmless: the next cycle re-sends the window once.
 - **Estimated spend.** LiteLLM computes cost from its price map × tokens (including any custom pricing you configured) — treat this as showback, not billable actuals. Every event carries a `cost_basis: estimated` system label.
 
 ## Quick start
@@ -74,15 +74,17 @@ Install a release binary and the unit from [deploy/litellm-datahub-exporter.serv
 | `DATASET` | `LiteLLM` | DataHub dataset name (letters, digits, `_`, `-`, single spaces) |
 | `MODE` | `per_call` | `per_call` (one event per request) or `daily` (one event per day × model × key; for very high volume, roughly >1M calls/day) |
 | `POLL_INTERVAL` | `5m` | Cycle interval |
-| `LOOKBACK_HOURS` | `48` | Trailing window re-read each cycle (absorbs LiteLLM's async spend writes; overlap is idempotent) |
+| `LOOKBACK_HOURS` | `48` | Trailing window re-read each cycle (absorbs LiteLLM's async spend writes; only new or changed events in it are pushed) |
 | `BACKFILL_DAYS` | `0` | On first run, export this much history (bounded by your `maximum_spend_logs_retention_period` and DataHub's ±2-year window) |
 | `FEATURE_METADATA_KEY` | `feature` | Key read from `spend_logs_metadata` into the `feature` label |
 | `EMIT_TRACE_LABELS` | `false` | Also emit `request_id`/`parent_trace_id` labels (high cardinality — leave off unless you need them) |
 | `GENAI_USER_EMAIL_SOURCE` | `none` | Where the person's email lives when LiteLLM cannot supply one: `none`, `end_user` or `key_alias`. See [Per-person email](#per-person-email) |
 | `TAG_DENY_PREFIXES` | `User-Agent` | Comma-separated tag prefixes to drop (LiteLLM auto-injects `User-Agent:` tags) |
-| `STATE_FILE` | `state.json` | Checkpoint path |
+| `STATE_FILE` | `state.json` | Checkpoint path. `sent.bin`, the fingerprints of the last pushed window (16 bytes per event), is kept in the same directory |
 | `METRICS_ADDR` | `:9464` | Prometheus `/metrics` + `/healthz` listener (`""` disables) |
 | `MAX_BATCH` | `5000` | Events per DataHub request (hard API cap: 50,000) |
+
+`/metrics` reports `litellm_exporter_events_read_total` (events built from the window), `litellm_exporter_events_pushed_total` (sent to DataHub) and `litellm_exporter_events_skipped_unchanged_total` (already sent with identical content). In steady state almost every read event is skipped.
 
 
 ## Per-person email

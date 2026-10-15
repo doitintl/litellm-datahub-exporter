@@ -2,6 +2,8 @@ package runner
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -53,8 +55,10 @@ func (r *Runner) Startup(ctx context.Context) error {
 }
 
 // Run executes cycles until ctx is done. Every cycle re-reads a trailing
-// window (checkpoint- and lookback-based); deterministic ids make the
-// overlap an idempotent overwrite on the DataHub side.
+// window (checkpoint- and lookback-based) so late or corrected spend rows are
+// picked up, but pushes only events that are new or changed since the last
+// successful cycle: DataHub appends a row per push, so re-sending the whole
+// window would store every event hundreds of times.
 func (r *Runner) Run(ctx context.Context) error {
 	ticker := time.NewTicker(r.cfg.PollInterval)
 	defer ticker.Stop()
@@ -97,22 +101,66 @@ func (r *Runner) Cycle(ctx context.Context) error {
 	}
 
 	metrics.RowsRead.Add(int64(rows))
+	metrics.EventsRead.Add(int64(len(events)))
 
-	if len(events) > 0 {
-		if err := r.datahub.Push(ctx, events, r.cfg.MaxBatch); err != nil {
+	// The new set is everything read this cycle, so entries for events that
+	// have aged out of the window drop out on their own.
+	sentPath := state.SentPath(r.cfg.StateFile)
+	prev := state.LoadSent(sentPath)
+	next := make(state.Sent, len(events))
+
+	var changed []datahub.Event
+
+	for _, e := range events {
+		fp, err := fingerprint(e)
+		if err != nil {
 			return err
+		}
+
+		next[fp] = struct{}{}
+
+		if _, ok := prev[fp]; !ok {
+			changed = append(changed, e)
 		}
 	}
 
-	metrics.EventsPushed.Add(int64(len(events)))
+	if len(changed) > 0 {
+		quarantined, err := r.datahub.Push(ctx, changed, r.cfg.MaxBatch)
+		if err != nil {
+			// prev stays on disk, so the next cycle re-sends this cycle's
+			// changes: possibly twice, never skipped.
+			return err
+		}
+
+		// A quarantined event was not stored; keep it out of the set so it
+		// is retried, as it was before the set existed.
+		rejected := make(map[string]bool, len(quarantined))
+		for _, id := range quarantined {
+			rejected[id] = true
+		}
+
+		for _, e := range changed {
+			if rejected[e.ID] {
+				fp, _ := fingerprint(e)
+				delete(next, fp)
+			}
+		}
+	}
+
+	metrics.EventsPushed.Add(int64(len(changed)))
+	metrics.EventsUnchanged.Add(int64(len(events) - len(changed)))
 	metrics.Quarantined.Store(int64(r.datahub.Quarantined))
 	metrics.SetLastSuccess(now)
+
+	if err := state.SaveSent(sentPath, next); err != nil {
+		r.log.Warn("sent-set save failed (safe, next cycle re-sends the window)", "err", err)
+	}
 
 	if err := state.Save(r.cfg.StateFile, state.State{LastSuccess: now}); err != nil {
 		r.log.Warn("checkpoint save failed (safe, will re-export)", "err", err)
 	}
 
-	r.log.Info("cycle complete", "window", startDate+".."+endDate, "rows", rows, "events", len(events), "quarantined", r.datahub.Quarantined)
+	r.log.Info("cycle complete", "window", startDate+".."+endDate, "rows", rows, "events", len(events), "pushed", len(changed), "unchanged", len(events)-len(changed), "quarantined", r.datahub.Quarantined)
 
 	return nil
 }
@@ -154,4 +202,17 @@ func (r *Runner) collect(ctx context.Context, startDate, endDate string) ([]data
 	}
 
 	return events, len(rows), nil
+}
+
+// fingerprint identifies an event's id and full content, so any change to a
+// cost, a token count or a label yields a new fingerprint and a re-push.
+func fingerprint(e datahub.Event) ([16]byte, error) {
+	data, err := json.Marshal(e)
+	if err != nil {
+		return [16]byte{}, err
+	}
+
+	sum := sha256.Sum256(data)
+
+	return [16]byte(sum[:16]), nil
 }

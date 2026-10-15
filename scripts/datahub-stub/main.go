@@ -1,7 +1,9 @@
 // datahub-stub is a minimal stand-in for the DoiT DataHub API used by the
 // integration test: it accepts event batches, enforces the contract limits
 // the real API enforces (batch size, provider pattern, within-batch id
-// uniqueness), and reports what it received on GET /received.
+// uniqueness), and reports what it received on GET /received: unique ids, and
+// every accepted event including re-pushes of an id (the real events table
+// appends a row per push, so the total is what DataHub would store).
 //
 // It also records the DIMENSIONS of every event, so a test can assert what a
 // label CONTAINS and not merely that a well-formed event arrived. GET
@@ -31,6 +33,7 @@ func main() {
 	var (
 		mu       sync.Mutex
 		eventIDs = map[string]int{}
+		total    int
 		datasets = map[string]bool{}
 		// "<type>/<key>" -> the distinct values seen, e.g.
 		// "system_label/genai/user_email" -> {"itest@example.com"}.
@@ -100,6 +103,7 @@ func main() {
 		mu.Lock()
 		for _, e := range body.Events {
 			eventIDs[e.ID]++
+			total++
 
 			for _, d := range e.Dimensions {
 				k := d.Type + "/" + d.Key
@@ -120,7 +124,7 @@ func main() {
 		mu.Lock()
 		defer mu.Unlock()
 
-		_ = json.NewEncoder(w).Encode(map[string]any{"unique_events": len(eventIDs)})
+		_ = json.NewEncoder(w).Encode(map[string]any{"unique_events": len(eventIDs), "total_events": total})
 	})
 
 	// Distinct values seen for one dimension, as a JSON array. An absent

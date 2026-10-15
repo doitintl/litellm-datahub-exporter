@@ -77,15 +77,29 @@ run_once() {
     ${src[@]+"${src[@]}"} go run "$DIR/cmd/exporter" --once
 }
 
+# One counter from the stub's /received report.
+received() {
+  curl -sf http://localhost:8181/received | sed -E "s/.*\"$1\":([0-9]+).*/\1/"
+}
+
 # Distinct values the stub saw for one dimension, as a bare sorted list.
 seen_dimension() {
   curl -sf "http://localhost:8181/dimension?key=$1" | tr -d '[]"' 
 }
 
 if run_once per_call; then
-  run_once per_call  # idempotency: re-run must not error and must not add unique events
+  RECEIVED=$(received unique_events)
+  STORED=$(received total_events)
 
-  RECEIVED=$(curl -sf http://localhost:8181/received | sed 's/[^0-9]//g')
+  # Nothing changed since the first run, so the second must push NOTHING:
+  # DataHub appends a row per push, so a re-sent unchanged event is a stored
+  # duplicate.
+  run_once per_call
+  if [ "$(received total_events)" -ne "$STORED" ]; then
+    echo "FAIL: unchanged re-run pushed $(( $(received total_events) - STORED )) events, want 0" >&2
+    exit 1
+  fi
+
   if [ "$RECEIVED" -lt 3 ]; then
     echo "FAIL: expected >=3 unique per-call events at the stub, got $RECEIVED" >&2
     exit 1
@@ -134,7 +148,7 @@ done
 
 run_once daily  # aggregate mode against the same proxy (daily endpoints, pagination)
 
-RECEIVED_AFTER_DAILY=$(curl -sf http://localhost:8181/received | sed 's/[^0-9]//g')
+RECEIVED_AFTER_DAILY=$(received unique_events)
 if [ "$RECEIVED_AFTER_DAILY" -le "$RECEIVED" ]; then
   echo "FAIL: daily mode added no events ($RECEIVED -> $RECEIVED_AFTER_DAILY)" >&2
   exit 1
