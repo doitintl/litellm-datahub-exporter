@@ -1,6 +1,8 @@
-// Package state persists the exporter's checkpoint. Losing this file is
-// safe: it only widens the next poll window, and deterministic event ids
-// make re-export an idempotent overwrite.
+// Package state persists the exporter's checkpoint and the fingerprints of
+// what it last pushed. Losing either file is safe: a lost checkpoint only
+// widens the next poll window, and a lost fingerprint set re-sends that
+// window once. Re-sent events add rows to DataHub, which readers dedupe by
+// event id, so the cost of loss is storage, never missing data.
 package state
 
 import (

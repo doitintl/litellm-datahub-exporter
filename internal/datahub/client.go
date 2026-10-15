@@ -2,7 +2,8 @@
 //
 // Contract (verified against the DoiT implementation): max 50,000 events per
 // request, max 255 metrics per event, event ids are the idempotency key with
-// read-time last-write-wins dedup, validation is all-or-nothing per batch,
+// read-time last-write-wins dedup (the events table itself is append-only:
+// every push of an id adds a row), validation is all-or-nothing per batch,
 // and the API is fronted by Cloudflare which rejects generic User-Agents.
 package datahub
 
@@ -101,21 +102,24 @@ func (c *Client) EnsureDataset(ctx context.Context, name, description, logoName 
 // Push sends events in chunks of at most maxBatch, deduplicating ids within
 // each request (a duplicate id inside one batch rejects the whole batch
 // server-side). 429/5xx responses are retried with backoff; a 400 bisects
-// the chunk to isolate and quarantine offending events.
-func (c *Client) Push(ctx context.Context, events []Event, maxBatch int) error {
+// the chunk to isolate and quarantine offending events. It returns the ids of
+// the events quarantined by this call.
+func (c *Client) Push(ctx context.Context, events []Event, maxBatch int) ([]string, error) {
 	events = dedupeByID(events)
+
+	var quarantined []string
 
 	for start := 0; start < len(events); start += maxBatch {
 		end := min(start+maxBatch, len(events))
-		if err := c.pushChunk(ctx, events[start:end]); err != nil {
-			return err
+		if err := c.pushChunk(ctx, events[start:end], &quarantined); err != nil {
+			return quarantined, err
 		}
 	}
 
-	return nil
+	return quarantined, nil
 }
 
-func (c *Client) pushChunk(ctx context.Context, events []Event) error {
+func (c *Client) pushChunk(ctx context.Context, events []Event, quarantined *[]string) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -159,13 +163,14 @@ func (c *Client) pushChunk(ctx context.Context, events []Event) error {
 		return nil
 	case status == http.StatusBadRequest && len(events) > 1:
 		mid := len(events) / 2
-		if err := c.pushChunk(ctx, events[:mid]); err != nil {
+		if err := c.pushChunk(ctx, events[:mid], quarantined); err != nil {
 			return err
 		}
 
-		return c.pushChunk(ctx, events[mid:])
+		return c.pushChunk(ctx, events[mid:], quarantined)
 	case status == http.StatusBadRequest:
 		c.Quarantined++
+		*quarantined = append(*quarantined, events[0].ID)
 		c.log.Error("event rejected by validation, quarantined", "id", events[0].ID, "response", respBody)
 
 		return nil
@@ -209,7 +214,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (int,
 
 func dedupeByID(events []Event) []Event {
 	seen := make(map[string]struct{}, len(events))
-	out := events[:0]
+	out := make([]Event, 0, len(events))
 
 	for _, e := range events {
 		if _, dup := seen[e.ID]; dup {

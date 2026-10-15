@@ -11,7 +11,9 @@ import (
 
 var (
 	RowsRead        atomic.Int64
+	EventsRead      atomic.Int64
 	EventsPushed    atomic.Int64
+	EventsUnchanged atomic.Int64
 	Cycles          atomic.Int64
 	CycleErrors     atomic.Int64
 	Quarantined     atomic.Int64
@@ -38,7 +40,9 @@ func Serve(addr string) {
 		}
 
 		fmt.Fprintf(w, "# TYPE litellm_exporter_rows_read_total counter\nlitellm_exporter_rows_read_total %d\n", RowsRead.Load())
+		fmt.Fprintf(w, "# TYPE litellm_exporter_events_read_total counter\nlitellm_exporter_events_read_total %d\n", EventsRead.Load())
 		fmt.Fprintf(w, "# TYPE litellm_exporter_events_pushed_total counter\nlitellm_exporter_events_pushed_total %d\n", EventsPushed.Load())
+		fmt.Fprintf(w, "# TYPE litellm_exporter_events_skipped_unchanged_total counter\nlitellm_exporter_events_skipped_unchanged_total %d\n", EventsUnchanged.Load())
 		fmt.Fprintf(w, "# TYPE litellm_exporter_cycles_total counter\nlitellm_exporter_cycles_total %d\n", Cycles.Load())
 		fmt.Fprintf(w, "# TYPE litellm_exporter_cycle_errors_total counter\nlitellm_exporter_cycle_errors_total %d\n", CycleErrors.Load())
 		fmt.Fprintf(w, "# TYPE litellm_exporter_events_quarantined_total counter\nlitellm_exporter_events_quarantined_total %d\n", Quarantined.Load())
